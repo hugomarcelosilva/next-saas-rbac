@@ -1,4 +1,3 @@
-import { organizationSchema } from '@saas/auth'
 import { FastifyInstance } from 'fastify'
 import { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
@@ -7,18 +6,18 @@ import { auth } from '@/http/middlewares/auth'
 import { prisma } from '@/lib/prisma'
 import { getUserPermissions } from '@/utils/get-user-permissions'
 
-import { UnauthorizedError } from '../_errors/unauthorized-error'
+import { BadRequestError } from '../_errors/bad-request-error'
 
-export async function shutdownOrganization(app: FastifyInstance) {
+export async function revokeInvite(app: FastifyInstance) {
   app
     .withTypeProvider<ZodTypeProvider>()
     .register(auth)
-    .delete(
-      '/organizations/:slug',
+    .post(
+      '/organizations/:slug/invites/:inviteId',
       {
         schema: {
-          tags: ['organizations'],
-          summary: 'Shutdown an organization',
+          tags: ['invites'],
+          summary: 'Revoke an invite',
           security: [
             {
               bearerAuth: [],
@@ -26,6 +25,7 @@ export async function shutdownOrganization(app: FastifyInstance) {
           ],
           params: z.object({
             slug: z.string(),
+            inviteId: z.string().uuid(),
           }),
           response: {
             204: z.null(),
@@ -33,25 +33,34 @@ export async function shutdownOrganization(app: FastifyInstance) {
         },
       },
       async (request, reply) => {
-        const { slug } = request.params
+        const { slug, inviteId } = request.params
 
         const userId = await request.getCurrentUserId()
-        const { membership, organization } =
+        const { organization, membership } =
           await request.getUserMembership(slug)
-
-        const authOrganization = organizationSchema.parse(organization)
 
         const { cannot } = getUserPermissions(userId, membership.role)
 
-        if (cannot('delete', authOrganization)) {
-          throw new UnauthorizedError(
-            'You are not allowed to shutdown this organization.',
+        if (cannot('delete', 'Invite')) {
+          throw new BadRequestError(
+            'You are not allowed to delete invites in this organization.',
           )
         }
 
-        await prisma.organization.delete({
+        const invite = await prisma.invite.findUnique({
           where: {
-            id: organization.id,
+            id: inviteId,
+            organizationId: organization.id,
+          },
+        })
+
+        if (!invite) {
+          throw new BadRequestError('Invite not found.')
+        }
+
+        await prisma.invite.delete({
+          where: {
+            id: inviteId,
           },
         })
 

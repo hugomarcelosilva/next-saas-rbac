@@ -1,4 +1,4 @@
-import { organizationSchema } from '@saas/auth'
+import { projectSchema } from '@saas/auth'
 import { FastifyInstance } from 'fastify'
 import { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
@@ -7,18 +7,19 @@ import { auth } from '@/http/middlewares/auth'
 import { prisma } from '@/lib/prisma'
 import { getUserPermissions } from '@/utils/get-user-permissions'
 
+import { BadRequestError } from '../_errors/bad-request-error'
 import { UnauthorizedError } from '../_errors/unauthorized-error'
 
-export async function shutdownOrganization(app: FastifyInstance) {
+export async function deleteProject(app: FastifyInstance) {
   app
     .withTypeProvider<ZodTypeProvider>()
     .register(auth)
     .delete(
-      '/organizations/:slug',
+      '/organizations/:slug/projects/:projectId',
       {
         schema: {
-          tags: ['organizations'],
-          summary: 'Shutdown an organization',
+          tags: ['projects'],
+          summary: 'Delete a project',
           security: [
             {
               bearerAuth: [],
@@ -26,6 +27,7 @@ export async function shutdownOrganization(app: FastifyInstance) {
           ],
           params: z.object({
             slug: z.string(),
+            projectId: z.string().uuid(),
           }),
           response: {
             204: z.null(),
@@ -33,25 +35,36 @@ export async function shutdownOrganization(app: FastifyInstance) {
         },
       },
       async (request, reply) => {
-        const { slug } = request.params
+        const { slug, projectId } = request.params
 
         const userId = await request.getCurrentUserId()
-        const { membership, organization } =
+        const { organization, membership } =
           await request.getUserMembership(slug)
 
-        const authOrganization = organizationSchema.parse(organization)
+        const project = await prisma.project.findUnique({
+          where: {
+            id: projectId,
+            organizationId: organization.id,
+          },
+        })
+
+        if (!project) {
+          throw new BadRequestError('Project not found.')
+        }
+
+        const authProject = projectSchema.parse(project)
 
         const { cannot } = getUserPermissions(userId, membership.role)
 
-        if (cannot('delete', authOrganization)) {
+        if (cannot('delete', authProject)) {
           throw new UnauthorizedError(
-            'You are not allowed to shutdown this organization.',
+            'You are not allowed to delete this project.',
           )
         }
 
-        await prisma.organization.delete({
+        await prisma.project.delete({
           where: {
-            id: organization.id,
+            id: projectId,
           },
         })
 
